@@ -21,8 +21,8 @@ class Seq2Seq(nn.Module):
     def __init__(self,encoder,decoder,config,beam_size=None,max_length=None,sos_id=None,eos_id=None):
         super(Seq2Seq, self).__init__()
         self.encoder = encoder
-        self.decoder=decoder
-        self.config=config
+        self.decoder = decoder
+        self.config = config
         self.register_buffer("bias", torch.tril(torch.ones(2048, 2048)))
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
@@ -49,6 +49,11 @@ class Seq2Seq(nn.Module):
         self._tie_or_clone_weights(self.lm_head,self.encoder.embeddings.word_embeddings)        
         
     def forward(self,source_ids=None,source_mask=None,similar_source_ids=None,similar_source_mask=None,target_ids=None,target_mask=None,args=None):   
+        source_ids=source_ids+similar_source_ids
+        for i in range(source_ids.shape[0]): # prevent out of range
+            for j in range(source_ids.shape[1]):
+                if source_ids[i,j]>5e4:
+                    source_ids[i,j]=5e4
         outputs = self.encoder(source_ids, attention_mask=source_mask)
         encoder_output = outputs[0].permute([1,0,2]).contiguous()
         if target_ids is not None:  
@@ -63,8 +68,7 @@ class Seq2Seq(nn.Module):
             shift_labels = target_ids[..., 1:].contiguous()
             # Flatten the tokens
             loss_fct = nn.CrossEntropyLoss(ignore_index=-1)
-            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1))[active_loss],
-                            shift_labels.view(-1)[active_loss])
+            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1))[active_loss], shift_labels.view(-1)[active_loss])
 
             outputs = loss,loss*active_loss.sum(),active_loss.sum()
             return outputs
@@ -82,7 +86,7 @@ class Seq2Seq(nn.Module):
                 for _ in range(self.max_length): 
                     if beam.done():
                         break
-                    attn_mask=-1e4 *(1-self.bias[:input_ids.shape[1],:input_ids.shape[1]])
+                    attn_mask=-1e4 * (1-self.bias[:input_ids.shape[1],:input_ids.shape[1]])
                     tgt_embeddings = self.encoder.embeddings(input_ids).permute([1,0,2]).contiguous()
                     out = self.decoder(tgt_embeddings,context,tgt_mask=attn_mask,memory_key_padding_mask=(1-context_mask).bool())
                     out = torch.tanh(self.dense(out))
@@ -103,7 +107,6 @@ class Seq2Seq(nn.Module):
 class Beam(object):
     def __init__(self, size,sos,eos):
         self.size = size
-        self.tt = torch.cuda
         # The score for each translation on the beam.
         self.scores = torch.FloatTensor(size).zero_()
         # The backpointers at each time-step.

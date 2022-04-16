@@ -263,7 +263,8 @@ def main():
         check_point=torch.load(args.load_model_path)
         dicts=collections.OrderedDict()
         for k,value in check_point.items():
-            if k == "roberta.embeddings.token_type_embeddings.weight":
+            print(k)
+            if k == "encoder.embeddings.token_type_embeddings.weight" and value.shape[0] == 1:
                 value=value.repeat(2,1)
                 print(value.size())
             dicts[k]=value
@@ -329,7 +330,7 @@ def main():
             for batch in bar:
                 batch = tuple(t.to(device) for t in batch)
                 source_ids,source_mask,similar_source_ids,similar_source_mask,target_ids,target_mask = batch
-                loss,_,_ = model(source_ids=source_ids,source_mask=source_mask,similar_source_ids=similar_source_ids,similar_source_mask=similar_source_mask,target_ids=target_ids,target_mask=target_mask,)
+                loss,_,_ = model(source_ids=source_ids,source_mask=source_mask,similar_source_ids=similar_source_ids,similar_source_mask=similar_source_mask,target_ids=target_ids,target_mask=target_mask)
 
                 if args.n_gpu > 1:
                     loss = loss.mean() # mean() to average on multi-gpu.
@@ -380,8 +381,7 @@ def main():
                     source_ids,source_mask,target_ids,target_mask = batch                  
 
                     with torch.no_grad():
-                        _,loss,num = model(source_ids=source_ids,source_mask=source_mask,
-                                           target_ids=target_ids,target_mask=target_mask)     
+                        _,loss,num = model(source_ids=source_ids,source_mask=source_mask,similar_source_ids=similar_source_ids,similar_source_mask=similar_source_mask,target_ids=target_ids,target_mask=target_mask)   
                     eval_loss += loss.sum().item()
                     tokens_num += num.sum().item()
                 #Pring loss of dev dataset    
@@ -434,7 +434,7 @@ def main():
                     batch = tuple(t.to(device) for t in batch)
                     source_ids,source_mask= batch                  
                     with torch.no_grad():
-                        preds = model(source_ids=source_ids,source_mask=source_mask)  
+                        preds = model(source_ids=source_ids,source_mask=source_mask,similar_source_ids=similar_source_ids,similar_source_mask=similar_source_mask)  
                         for pred in preds:
                             t=pred[0].cpu().numpy()
                             t=list(t)
