@@ -49,18 +49,20 @@ class Seq2Seq(nn.Module):
         self._tie_or_clone_weights(self.lm_head,self.encoder.embeddings.word_embeddings)        
         
     def forward(self,source_ids=None,source_mask=None,similar_source_ids=None,similar_source_mask=None,target_ids=None,target_mask=None,args=None):   
-        source_ids=source_ids+similar_source_ids
-        for i in range(source_ids.shape[0]): # prevent out of range
-            for j in range(source_ids.shape[1]):
-                if source_ids[i,j]>5e4:
-                    source_ids[i,j]=5e4
-        outputs = self.encoder(source_ids, attention_mask=source_mask)
+        source_ids=torch.concat([source_ids,similar_source_ids],dim=1)
+        source_mask=torch.concat([source_mask,similar_source_mask],dim=1)
+        token_type_ids=torch.ones([source_ids.shape[0],source_ids.shape[1]],dtype=torch.long)
+        for i in range(token_type_ids.shape[0]):
+            for j in range(token_type_ids.shape[1]//2):
+                token_type_ids[i,j]=0
+            print(token_type_ids[i,:])
+        outputs = self.encoder(source_ids, attention_mask=source_mask, token_type_ids=token_type_ids)
         encoder_output = outputs[0].permute([1,0,2]).contiguous()
         if target_ids is not None:  
             attn_mask=-1e4 *(1-self.bias[:target_ids.shape[1],:target_ids.shape[1]])
             tgt_embeddings = self.encoder.embeddings(target_ids).permute([1,0,2]).contiguous()
             out = self.decoder(tgt_embeddings,encoder_output,tgt_mask=attn_mask,memory_key_padding_mask=(1-source_mask).bool())
-            hidden_states = torch.tanh(self.dense(out)).permute([1,0,2]).contiguous()
+            hidden_states = torch.relu(self.dense(out)).permute([1,0,2]).contiguous()
             lm_logits = self.lm_head(hidden_states)
             # Shift so that tokens < n predict n
             active_loss = target_mask[..., 1:].ne(0).view(-1) == 1
@@ -75,7 +77,7 @@ class Seq2Seq(nn.Module):
         else:
             #Predict 
             preds=[]       
-            zero=torch.LongTensor(1).fill_(0)     
+            zero=torch.LongTensor(1).fill_(0)
             for i in range(source_ids.shape[0]):
                 context=encoder_output[:,i:i+1]
                 context_mask=source_mask[i:i+1,:]
@@ -89,7 +91,7 @@ class Seq2Seq(nn.Module):
                     attn_mask=-1e4 * (1-self.bias[:input_ids.shape[1],:input_ids.shape[1]])
                     tgt_embeddings = self.encoder.embeddings(input_ids).permute([1,0,2]).contiguous()
                     out = self.decoder(tgt_embeddings,context,tgt_mask=attn_mask,memory_key_padding_mask=(1-context_mask).bool())
-                    out = torch.tanh(self.dense(out))
+                    out = torch.relu(self.dense(out))
                     hidden_states=out.permute([1,0,2]).contiguous()[:,-1,:]
                     out = self.lsm(self.lm_head(hidden_states)).data
                     beam.advance(out)
@@ -99,7 +101,6 @@ class Seq2Seq(nn.Module):
                 pred=beam.buildTargetTokens(hyp)[:self.beam_size]
                 pred=[torch.cat([x.view(-1) for x in p]+[zero]*(self.max_length-len(p))).view(1,-1) for p in pred]
                 preds.append(torch.cat(pred,0).unsqueeze(0))
-                
             preds=torch.cat(preds,0)                
             return preds   
         
@@ -160,7 +161,7 @@ class Beam(object):
 
         # bestScoresId is flattened beam x word array, so calculate which
         # word and beam each score came from
-        prevK = bestScoresId // numWords
+        prevK = torch.div(bestScoresId, numWords, rounding_mode='floor')
         self.prevKs.append(prevK)
         self.nextYs.append((bestScoresId - prevK * numWords))
 

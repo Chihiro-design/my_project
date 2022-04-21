@@ -1,5 +1,5 @@
-#python run.py --do_train --do_eval --model_type roberta --model_name_or_path microsoft/codebert-base --train_filename dataset/java/train.jsonl --dev_filename dataset/java/valid.jsonl --output_dir model/java --max_source_length 256 --max_target_length 128 --beam_size 10 --train_batch_size 32 --eval_batch_size 32 --learning_rate 5e-5 --num_train_epochs 10
-#python run.py --do_test --model_type roberta --model_name_or_path microsoft/codebert-base --load_model_path model/java/checkpoint-best-ppl/pytorch_model.bin --dev_filename dataset/java/valid.jsonl --test_filename dataset/java/test.jsonl --output_dir model/java --max_source_length 256 --max_target_length 128 --beam_size 10 --eval_batch_size 32
+# python run.py --do_train --do_eval --model_type roberta --model_name_or_path microsoft/codebert-base --train_filename dataset/java/train.jsonl --dev_filename dataset/java/valid.jsonl --output_dir model/java --max_source_length 256 --max_target_length 128 --beam_size 10 --train_batch_size 32 --eval_batch_size 32 --learning_rate 5e-5 --num_train_epochs 10
+# python run.py --do_test --model_type roberta --model_name_or_path microsoft/codebert-base --load_model_path model/java/checkpoint-best-ppl/pytorch_model.bin --dev_filename dataset/java/valid.jsonl --test_filename dataset/java/test.jsonl --output_dir model/java --max_source_length 256 --max_target_length 128 --beam_size 10 --eval_batch_size 32
 
 from __future__ import absolute_import
 from operator import mod
@@ -24,10 +24,8 @@ from torch.utils.data.distributed import DistributedSampler
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
                           RobertaConfig, RobertaModel, RobertaTokenizer)
 MODEL_CLASSES = {'roberta': (RobertaConfig, RobertaModel, RobertaTokenizer)}
-
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s - %(message)s',
-                    datefmt = '%m/%d/%Y %H:%M:%S',
-                    level = logging.INFO)
+                    datefmt = '%m/%d/%Y %H:%M:%S', level = logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -259,12 +257,11 @@ def main():
                   beam_size=args.beam_size,max_length=args.max_target_length,
                   sos_id=tokenizer.cls_token_id,eos_id=tokenizer.sep_token_id)
     if args.load_model_path is not None:
-        logger.info("reload model from {}".format(args.load_model_path))
         check_point=torch.load(args.load_model_path)
         dicts=collections.OrderedDict()
         for k,value in check_point.items():
-            print(k)
-            if k == "encoder.embeddings.token_type_embeddings.weight" and value.shape[0] == 1:
+            #print(k)
+            if k=="encoder.embeddings.token_type_embeddings.weight" and value.shape[0]==1:
                 value=value.repeat(2,1)
                 print(value.size())
             dicts[k]=value
@@ -362,14 +359,16 @@ def main():
                     eval_features = convert_examples_to_features(eval_examples, tokenizer, args,stage='dev')
                     all_source_ids = torch.tensor([f.source_ids for f in eval_features], dtype=torch.long)
                     all_source_mask = torch.tensor([f.source_mask for f in eval_features], dtype=torch.long)
+                    all_similar_source_ids = torch.tensor([f.similar_source_ids for f in eval_features], dtype=torch.long)
+                    all_similar_source_mask = torch.tensor([f.similar_source_mask for f in eval_features], dtype=torch.long)
                     all_target_ids = torch.tensor([f.target_ids for f in eval_features], dtype=torch.long)
                     all_target_mask = torch.tensor([f.target_mask for f in eval_features], dtype=torch.long)      
-                    eval_data = TensorDataset(all_source_ids,all_source_mask,all_target_ids,all_target_mask)   
+                    eval_data = TensorDataset(all_source_ids,all_source_mask,all_similar_source_ids,all_similar_source_mask,all_target_ids,all_target_mask)   
                     dev_dataset['dev_loss']=eval_examples,eval_data
                 eval_sampler = SequentialSampler(eval_data)
                 eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
 
-                logger.info("\n***** Running evaluation *****")
+                logger.info("***** Running evaluation *****")
                 logger.info("  Num examples = %d", len(eval_examples))
                 logger.info("  Batch size = %d", args.eval_batch_size)
 
@@ -378,7 +377,7 @@ def main():
                 eval_loss,tokens_num = 0,0
                 for batch in eval_dataloader:
                     batch = tuple(t.to(device) for t in batch)
-                    source_ids,source_mask,target_ids,target_mask = batch                  
+                    source_ids,source_mask,similar_source_ids,similar_source_mask,target_ids,target_mask = batch                  
 
                     with torch.no_grad():
                         _,loss,num = model(source_ids=source_ids,source_mask=source_mask,similar_source_ids=similar_source_ids,similar_source_mask=similar_source_mask,target_ids=target_ids,target_mask=target_mask)   
@@ -421,8 +420,10 @@ def main():
                     eval_examples = random.sample(eval_examples,min(1000,len(eval_examples)))
                     eval_features = convert_examples_to_features(eval_examples, tokenizer, args,stage='test')
                     all_source_ids = torch.tensor([f.source_ids for f in eval_features], dtype=torch.long)
-                    all_source_mask = torch.tensor([f.source_mask for f in eval_features], dtype=torch.long)    
-                    eval_data = TensorDataset(all_source_ids,all_source_mask)   
+                    all_source_mask = torch.tensor([f.source_mask for f in eval_features], dtype=torch.long)
+                    all_similar_source_ids = torch.tensor([f.similar_source_ids for f in eval_features], dtype=torch.long)
+                    all_similar_source_mask = torch.tensor([f.similar_source_mask for f in eval_features], dtype=torch.long)   
+                    eval_data = TensorDataset(all_source_ids,all_source_mask,all_similar_source_ids,all_similar_source_mask)   
                     dev_dataset['dev_bleu']=eval_examples,eval_data
 
                 eval_sampler = SequentialSampler(eval_data)
@@ -432,7 +433,7 @@ def main():
                 p=[]
                 for batch in eval_dataloader:
                     batch = tuple(t.to(device) for t in batch)
-                    source_ids,source_mask= batch                  
+                    source_ids,source_mask,similar_source_ids,similar_source_mask = batch                  
                     with torch.no_grad():
                         preds = model(source_ids=source_ids,source_mask=source_mask,similar_source_ids=similar_source_ids,similar_source_mask=similar_source_mask)  
                         for pred in preds:
@@ -444,7 +445,7 @@ def main():
                             p.append(text)
                 model.train()
                 predictions=[]
-                with open(os.path.join(args.output_dir,"dev.output"),'w') as f, open(os.path.join(args.output_dir,"dev.gold"),'w') as f1:
+                with open(os.path.join(args.output_dir,"dev.output"),'w',encoding='utf-8') as f, open(os.path.join(args.output_dir,"dev.gold"),'w',encoding='utf-8') as f1:
                     for ref,gold in zip(p,eval_examples):
                         predictions.append(str(gold.idx)+'\t'+ref)
                         f.write(str(gold.idx)+'\t'+ref+'\n')
@@ -477,8 +478,10 @@ def main():
             eval_examples = read_examples(file)
             eval_features = convert_examples_to_features(eval_examples, tokenizer, args,stage='test')
             all_source_ids = torch.tensor([f.source_ids for f in eval_features], dtype=torch.long)
-            all_source_mask = torch.tensor([f.source_mask for f in eval_features], dtype=torch.long)    
-            eval_data = TensorDataset(all_source_ids,all_source_mask)   
+            all_source_mask = torch.tensor([f.source_mask for f in eval_features], dtype=torch.long)
+            all_similar_source_ids = torch.tensor([f.similar_source_ids for f in eval_features], dtype=torch.long)
+            all_similar_source_mask = torch.tensor([f.similar_source_mask for f in eval_features], dtype=torch.long)    
+            eval_data = TensorDataset(all_source_ids,all_source_mask,all_similar_source_ids,all_similar_source_mask)   
 
             # Calculate bleu
             eval_sampler = SequentialSampler(eval_data)
@@ -488,9 +491,9 @@ def main():
             p=[]
             for batch in tqdm(eval_dataloader,total=len(eval_dataloader)):
                 batch = tuple(t.to(device) for t in batch)
-                source_ids,source_mask= batch                  
+                source_ids,source_mask,similar_source_ids,similar_source_mask = batch                  
                 with torch.no_grad():
-                    preds = model(source_ids=source_ids,source_mask=source_mask)  
+                    preds = model(source_ids=source_ids,source_mask=source_mask,similar_source_ids=similar_source_ids,similar_source_mask=similar_source_mask)  
                     for pred in preds:
                         t=pred[0].cpu().numpy()
                         t=list(t)
@@ -500,7 +503,7 @@ def main():
                         p.append(text)
             model.train()
             predictions=[]
-            with open(os.path.join(args.output_dir,"test_{}.output".format(str(idx))),'w') as f, open(os.path.join(args.output_dir,"test_{}.gold".format(str(idx))),'w') as f1:
+            with open(os.path.join(args.output_dir,"test_{}.output".format(str(idx))),'w',encoding='utf-8') as f, open(os.path.join(args.output_dir,"test_{}.gold".format(str(idx))),'w',encoding='utf-8') as f1:
                 for ref,gold in zip(p,eval_examples):
                     predictions.append(str(gold.idx)+'\t'+ref)
                     f.write(str(gold.idx)+'\t'+ref+'\n')
