@@ -247,15 +247,18 @@ def main():
         
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
-    config.type_vocab_size = 2
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,do_lower_case=args.do_lower_case)
 
     encoder = model_class.from_pretrained(args.model_name_or_path,config=config) 
     model_dict = encoder.state_dict()
+    dicts = collections.OrderedDict()
     for k, v in model_dict.items():
         if k == 'embeddings.token_type_embeddings.weight' and v.shape[0] == 1:
             v = v.repeat(2, 1)
-    encoder.type_vocab_size = 2
+        dicts[k] = v
+    torch.save(dicts,'model/encoder.bin')
+    config.type_vocab_size = 2
+    encoder = model_class.from_pretrained('model/encoder.bin',config=config)
     
     decoder_layer = nn.TransformerDecoderLayer(d_model=config.hidden_size, nhead=config.num_attention_heads)
     decoder = nn.TransformerDecoder(decoder_layer, num_layers=6)
