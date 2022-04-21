@@ -247,25 +247,22 @@ def main():
         
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
+    config.type_vocab_size = 2
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,do_lower_case=args.do_lower_case)
 
-    #budild model
-    encoder = model_class.from_pretrained(args.model_name_or_path,config=config)    
+    encoder = model_class.from_pretrained(args.model_name_or_path,config=config) 
+    model_dict = encoder.state_dict()
+    for k, v in model_dict.items():
+        if k == 'embeddings.token_type_embeddings.weight' and v.shape[0] == 1:
+            v = v.repeat(2, 1)
+    encoder.type_vocab_size = 2
+    
     decoder_layer = nn.TransformerDecoderLayer(d_model=config.hidden_size, nhead=config.num_attention_heads)
     decoder = nn.TransformerDecoder(decoder_layer, num_layers=6)
     model=Seq2Seq(encoder=encoder,decoder=decoder,config=config,
                   beam_size=args.beam_size,max_length=args.max_target_length,
                   sos_id=tokenizer.cls_token_id,eos_id=tokenizer.sep_token_id)
     if args.load_model_path is not None:
-        check_point=torch.load(args.load_model_path)
-        dicts=collections.OrderedDict()
-        for k,value in check_point.items():
-            #print(k)
-            if k=="encoder.embeddings.token_type_embeddings.weight" and value.shape[0]==1:
-                value=value.repeat(2,1)
-                print(value.size())
-            dicts[k]=value
-        torch.save(dicts,args.load_model_path)
         model.load_state_dict(torch.load(args.load_model_path))
     
     model.to(device)
