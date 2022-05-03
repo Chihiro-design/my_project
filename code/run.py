@@ -1,10 +1,9 @@
-# python run.py --do_train --do_eval --model_type roberta --model_name_or_path microsoft/codebert-base --train_filename dataset/java/train.jsonl --dev_filename dataset/java/valid.jsonl --output_dir model/java --max_source_length 256 --max_target_length 128 --beam_size 10 --train_batch_size 32 --eval_batch_size 32 --learning_rate 5e-5 --num_train_epochs 10
-# python run.py --do_test --model_type roberta --model_name_or_path microsoft/codebert-base --load_model_path model/java/checkpoint-best-ppl/pytorch_model.bin --dev_filename dataset/java/valid.jsonl --test_filename dataset/java/test.jsonl --output_dir model/java --max_source_length 256 --max_target_length 128 --beam_size 10 --eval_batch_size 32
+# python run.py --do_train --do_eval --model_type roberta --model_name_or_path microsoft/codebert-base --train_filename dataset/java/train.jsonl --dev_filename dataset/java/valid.jsonl --output_dir model/java --max_source_length 256 --max_target_length 128 --beam_size 10 --train_batch_size 32 --eval_batch_size 32 --learning_rate 5e-5 --num_train_epochs 20
+# python run.py --do_test --model_type roberta --model_name_or_path microsoft/codebert-base --load_model_path model/java/checkpoint-best-ppl/pytorch_model.bin --dev_filename dataset/java/valid.jsonl --test_filename dataset/java/test.jsonl --output_dir model/java --max_source_length 256 --max_target_length 128 --beam_size 10 --eval_batch_size 64
 
-from __future__ import absolute_import
-from operator import mod
 import os
 import sys
+import re
 import bleu
 import pickle
 import torch
@@ -19,7 +18,7 @@ from itertools import cycle
 import torch.nn as nn
 from model import Seq2Seq
 from tqdm import tqdm, trange
-from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler,TensorDataset
+from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
                           RobertaConfig, RobertaModel, RobertaTokenizer)
@@ -28,6 +27,103 @@ logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s - %(message
                     datefmt = '%m/%d/%Y %H:%M:%S', level = logging.INFO)
 logger = logging.getLogger(__name__)
 
+parser = argparse.ArgumentParser()
+
+## Required parameters  
+parser.add_argument("--model_type", default=None, type=str, required=True,
+                    help="Model type: e.g. roberta")
+parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
+                    help="Path to pre-trained model: e.g. roberta-base" )   
+parser.add_argument("--output_dir", default=None, type=str, required=True,
+                    help="The output directory where the model predictions and checkpoints will be written.")
+parser.add_argument("--load_model_path", default=None, type=str, 
+                    help="Path to trained model: Should contain the .bin files" )    
+## Other parameters
+parser.add_argument("--train_filename", default=None, type=str, 
+                    help="The train filename. Should contain the .jsonl files for this task.")
+parser.add_argument("--dev_filename", default=None, type=str, 
+                    help="The dev filename. Should contain the .jsonl files for this task.")
+parser.add_argument("--test_filename", default=None, type=str, 
+                    help="The test filename. Should contain the .jsonl files for this task.")  
+
+parser.add_argument("--config_name", default="", type=str,
+                    help="Pretrained config name or path if not the same as model_name")
+parser.add_argument("--tokenizer_name", default="", type=str,
+                    help="Pretrained tokenizer name or path if not the same as model_name") 
+parser.add_argument("--max_source_length", default=64, type=int,
+                    help="The maximum total source sequence length after tokenization. Sequences longer "
+                            "than this will be truncated, sequences shorter will be padded.")
+parser.add_argument("--max_target_length", default=32, type=int,
+                    help="The maximum total target sequence length after tokenization. Sequences longer "
+                            "than this will be truncated, sequences shorter will be padded.")
+
+parser.add_argument("--do_train", action='store_true',
+                    help="Whether to run training.")
+parser.add_argument("--do_eval", action='store_true',
+                    help="Whether to run eval on the dev set.")
+parser.add_argument("--do_test", action='store_true',
+                    help="Whether to run eval on the dev set.")
+parser.add_argument("--do_lower_case", action='store_true',
+                    help="Set this flag if you are using an uncased model.")
+parser.add_argument("--no_cuda", action='store_true',
+                    help="Avoid using CUDA when available") 
+
+parser.add_argument("--train_batch_size", default=8, type=int,
+                    help="Batch size per GPU/CPU for training.")
+parser.add_argument("--eval_batch_size", default=8, type=int,
+                    help="Batch size per GPU/CPU for evaluation.")
+parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
+                    help="Number of updates steps to accumulate before performing a backward/update pass.")
+parser.add_argument("--learning_rate", default=5e-5, type=float,
+                    help="The initial learning rate for Adam.")
+parser.add_argument("--beam_size", default=10, type=int,
+                    help="beam size for beam search")    
+parser.add_argument("--weight_decay", default=0.0, type=float,
+                    help="Weight deay if we apply some.")
+parser.add_argument("--adam_epsilon", default=1e-8, type=float,
+                    help="Epsilon for Adam optimizer.")
+parser.add_argument("--max_grad_norm", default=1.0, type=float,
+                    help="Max gradient norm.")
+parser.add_argument("--num_train_epochs", default=3, type=int,
+                    help="Total number of training epochs to perform.")
+parser.add_argument("--max_steps", default=-1, type=int,
+                    help="If > 0: set total number of training steps to perform. Override num_train_epochs.")
+parser.add_argument("--eval_steps", default=-1, type=int,
+                    help="")
+parser.add_argument("--train_steps", default=-1, type=int,
+                    help="")
+parser.add_argument("--warmup_steps", default=0, type=int,
+                    help="Linear warmup over warmup_steps.")
+parser.add_argument("--local_rank", type=int, default=-1,
+                    help="For distributed training: local_rank")   
+parser.add_argument('--seed', type=int, default=42,
+                    help="random seed for initialization")
+
+args = parser.parse_args()
+
+config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
+config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
+tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,do_lower_case=args.do_lower_case)
+
+if not os.path.exists('model/encoder.bin'):
+    encoder = model_class.from_pretrained(args.model_name_or_path,config=config) 
+    model_dict = encoder.state_dict()
+    dicts = collections.OrderedDict()
+    for k, v in model_dict.items():
+        if k == 'embeddings.token_type_embeddings.weight' and v.shape[0] == 1:
+            v = v.repeat(2, 1)
+        dicts[k] = v
+    torch.save(dicts,'model/encoder.bin')
+config.type_vocab_size = 2
+encoder = model_class.from_pretrained('model/encoder.bin',config=config)
+decoder_layer = nn.TransformerDecoderLayer(d_model=config.hidden_size, nhead=config.num_attention_heads)
+decoder = nn.TransformerDecoder(decoder_layer, num_layers=6)
+model=Seq2Seq(encoder=encoder,decoder=decoder,config=config,
+              beam_size=args.beam_size,max_length=args.max_target_length,
+              sos_id=tokenizer.cls_token_id,eos_id=tokenizer.sep_token_id)
+if args.load_model_path is not None:
+    model.load_state_dict(torch.load(args.load_model_path,map_location='cpu'))
+        
 
 class Example(object):
     """A single training/test example."""
@@ -48,7 +144,7 @@ def read_examples(filename):
                 js['idx']=idx
             code=' '.join(js['code_tokens']).replace('\n',' ')
             code=' '.join(code.strip().split())
-            
+
             similar_docstring=' '.join(js['similar_docstring']).replace('\n','')
             similar_docstring=' '.join(similar_docstring.strip().split())
             
@@ -76,7 +172,7 @@ class InputFeatures(object):
         self.similar_source_mask=similar_source_mask
         self.target_mask = target_mask             
 
-def convert_examples_to_features(examples, tokenizer, args,stage=None):
+def convert_examples_to_features(examples, tokenizer, args, stage=None):
     features = []
     for example_index, example in enumerate(examples):
         #source
@@ -88,7 +184,10 @@ def convert_examples_to_features(examples, tokenizer, args,stage=None):
         source_ids+=[tokenizer.pad_token_id]*padding_length
         source_mask+=[0]*padding_length
 
-        similar_source_tokens = tokenizer.tokenize(example.similar_source)[:args.max_source_length-2]
+        if example.similar_source is None:
+            similar_source_tokens = tokenizer.tokenize("None")
+        else:
+            similar_source_tokens = tokenizer.tokenize(example.similar_source)[:args.max_source_length-2]
         similar_source_tokens =[tokenizer.cls_token]+similar_source_tokens+[tokenizer.sep_token]
         similar_source_ids =  tokenizer.convert_tokens_to_ids(similar_source_tokens) 
         similar_source_mask = [1] * (len(similar_source_tokens))
@@ -148,82 +247,38 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
 
 
-def main():
-    parser = argparse.ArgumentParser()
+def predict(text):
+    examples=[]
+    text=text.replace('\n',' ')
+    pattern=r'([\`\~\@\#\$\%\^\&\(\)\[\]\{\}\;\:\'\"\,\.\?])'
+    text=re.sub(pattern,r' \1 ',text)
+    text=text.strip()
+    text=re.split(r'\s+',text)
 
-    ## Required parameters  
-    parser.add_argument("--model_type", default=None, type=str, required=True,
-                        help="Model type: e.g. roberta")
-    parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
-                        help="Path to pre-trained model: e.g. roberta-base" )   
-    parser.add_argument("--output_dir", default=None, type=str, required=True,
-                        help="The output directory where the model predictions and checkpoints will be written.")
-    parser.add_argument("--load_model_path", default=None, type=str, 
-                        help="Path to trained model: Should contain the .bin files" )    
-    ## Other parameters
-    parser.add_argument("--train_filename", default=None, type=str, 
-                        help="The train filename. Should contain the .jsonl files for this task.")
-    parser.add_argument("--dev_filename", default=None, type=str, 
-                        help="The dev filename. Should contain the .jsonl files for this task.")
-    parser.add_argument("--test_filename", default=None, type=str, 
-                        help="The test filename. Should contain the .jsonl files for this task.")  
-    
-    parser.add_argument("--config_name", default="", type=str,
-                        help="Pretrained config name or path if not the same as model_name")
-    parser.add_argument("--tokenizer_name", default="", type=str,
-                        help="Pretrained tokenizer name or path if not the same as model_name") 
-    parser.add_argument("--max_source_length", default=64, type=int,
-                        help="The maximum total source sequence length after tokenization. Sequences longer "
-                             "than this will be truncated, sequences shorter will be padded.")
-    parser.add_argument("--max_target_length", default=32, type=int,
-                        help="The maximum total target sequence length after tokenization. Sequences longer "
-                             "than this will be truncated, sequences shorter will be padded.")
-    
-    parser.add_argument("--do_train", action='store_true',
-                        help="Whether to run training.")
-    parser.add_argument("--do_eval", action='store_true',
-                        help="Whether to run eval on the dev set.")
-    parser.add_argument("--do_test", action='store_true',
-                        help="Whether to run eval on the dev set.")
-    parser.add_argument("--do_lower_case", action='store_true',
-                        help="Set this flag if you are using an uncased model.")
-    parser.add_argument("--no_cuda", action='store_true',
-                        help="Avoid using CUDA when available") 
-    
-    parser.add_argument("--train_batch_size", default=8, type=int,
-                        help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--eval_batch_size", default=8, type=int,
-                        help="Batch size per GPU/CPU for evaluation.")
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
-                        help="Number of updates steps to accumulate before performing a backward/update pass.")
-    parser.add_argument("--learning_rate", default=5e-5, type=float,
-                        help="The initial learning rate for Adam.")
-    parser.add_argument("--beam_size", default=10, type=int,
-                        help="beam size for beam search")    
-    parser.add_argument("--weight_decay", default=0.0, type=float,
-                        help="Weight deay if we apply some.")
-    parser.add_argument("--adam_epsilon", default=1e-8, type=float,
-                        help="Epsilon for Adam optimizer.")
-    parser.add_argument("--max_grad_norm", default=1.0, type=float,
-                        help="Max gradient norm.")
-    parser.add_argument("--num_train_epochs", default=3, type=int,
-                        help="Total number of training epochs to perform.")
-    parser.add_argument("--max_steps", default=-1, type=int,
-                        help="If > 0: set total number of training steps to perform. Override num_train_epochs.")
-    parser.add_argument("--eval_steps", default=-1, type=int,
-                        help="")
-    parser.add_argument("--train_steps", default=-1, type=int,
-                        help="")
-    parser.add_argument("--warmup_steps", default=0, type=int,
-                        help="Linear warmup over warmup_steps.")
-    parser.add_argument("--local_rank", type=int, default=-1,
-                        help="For distributed training: local_rank")   
-    parser.add_argument('--seed', type=int, default=42,
-                        help="random seed for initialization")
-    # print arguments
-    args = parser.parse_args()
-    logger.info(args)
+    code=' '.join(text).replace('\n',' ')
+    code=' '.join(code.strip().split())
+    examples.append(Example(idx=1,source=code,similar_source=None,target=None))
 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
+
+    eval_features = convert_examples_to_features(examples, tokenizer, args, stage='test')
+    all_source_ids = torch.tensor([f.source_ids for f in eval_features], dtype=torch.long)
+    all_source_mask = torch.tensor([f.source_mask for f in eval_features], dtype=torch.long)  
+
+    model.eval()           
+    with torch.no_grad():
+        preds = model(source_ids=all_source_ids,source_mask=all_source_mask)  
+        for pred in preds:
+            t=pred[0].cpu().numpy()
+            t=list(t)
+            if 0 in t:
+                t=t[:t.index(0)]
+            p = tokenizer.decode(t,clean_up_tokenization_spaces=False)
+            return p
+
+
+if __name__ == "__main__":
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
@@ -233,8 +288,6 @@ def main():
         device = torch.device("cuda", args.local_rank)
         torch.distributed.init_process_group(backend='nccl')
         args.n_gpu = 1
-    #device = torch.device("cpu")
-    #args.n_gpu = 1
 
     logger.warning("Process rank: %s, device: %s, n_gpu: %s, distributed training: %s",
                     args.local_rank, device, args.n_gpu, bool(args.local_rank != -1))
@@ -244,39 +297,9 @@ def main():
     # make dir if output_dir not exist
     if os.path.exists(args.output_dir) is False:
         os.makedirs(args.output_dir)
-        
-    config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
-    config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
-    tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,do_lower_case=args.do_lower_case)
-
-    encoder = model_class.from_pretrained(args.model_name_or_path,config=config) 
-    model_dict = encoder.state_dict()
-    dicts = collections.OrderedDict()
-    for k, v in model_dict.items():
-        if k == 'embeddings.token_type_embeddings.weight' and v.shape[0] == 1:
-            v = v.repeat(2, 1)
-        dicts[k] = v
-    torch.save(dicts,'model/encoder.bin')
-    config.type_vocab_size = 2
-    encoder = model_class.from_pretrained('model/encoder.bin',config=config)
-    
-    decoder_layer = nn.TransformerDecoderLayer(d_model=config.hidden_size, nhead=config.num_attention_heads)
-    decoder = nn.TransformerDecoder(decoder_layer, num_layers=6)
-    model=Seq2Seq(encoder=encoder,decoder=decoder,config=config,
-                  beam_size=args.beam_size,max_length=args.max_target_length,
-                  sos_id=tokenizer.cls_token_id,eos_id=tokenizer.sep_token_id)
-    if args.load_model_path is not None:
-        model.load_state_dict(torch.load(args.load_model_path))
     
     model.to(device)
-    if args.local_rank != -1:
-        # Distributed training
-        try:
-            from apex.parallel import DistributedDataParallel as DDP
-        except ImportError:
-            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
-        model = DDP(model)
-    elif args.n_gpu > 1:
+    if args.n_gpu > 1:
         # multi-gpu training
         model = torch.nn.DataParallel(model)
         
@@ -309,9 +332,7 @@ def main():
         ]
         t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
         optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-        scheduler = get_linear_schedule_with_warmup(optimizer,
-                                                    num_warmup_steps=int(t_total*0.1),
-                                                    num_training_steps=t_total)
+        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=int(t_total*0.1), num_training_steps=t_total)
     
         #Start training
         logger.info("***** Running training *****")
@@ -513,7 +534,3 @@ def main():
             dev_bleu=round(bleu.bleuFromMaps(goldMap, predictionMap)[0],2)
             logger.info("  %s = %s "%("bleu-4",str(dev_bleu)))
             logger.info("  "+"*"*20) 
-
-
-if __name__ == "__main__":
-    main()
