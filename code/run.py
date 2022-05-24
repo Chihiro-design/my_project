@@ -1,4 +1,4 @@
-# python run.py --do_train --do_eval --model_type roberta --model_name_or_path microsoft/codebert-base --train_filename dataset/java/train.jsonl --dev_filename dataset/java/valid.jsonl --output_dir model/java --max_source_length 256 --max_target_length 128 --beam_size 10 --train_batch_size 32 --eval_batch_size 32 --learning_rate 5e-5 --num_train_epochs 20
+# python run.py --do_train --do_eval --model_type roberta --model_name_or_path microsoft/codebert-base --train_filename dataset/java/train.jsonl --dev_filename dataset/java/valid.jsonl --output_dir model/java --max_source_length 256 --max_target_length 128 --beam_size 10 --train_batch_size 32 --eval_batch_size 32 --learning_rate 5e-5 --num_train_epochs 10
 # python run.py --do_test --model_type roberta --model_name_or_path microsoft/codebert-base --load_model_path model/java/checkpoint-best-ppl/pytorch_model.bin --dev_filename dataset/java/valid.jsonl --test_filename dataset/java/test.jsonl --output_dir model/java --max_source_length 256 --max_target_length 128 --beam_size 10 --eval_batch_size 64
 
 import os

@@ -15,12 +15,12 @@ root.geometry('750x600')
 root.title('Code Summarization')
 
 label1=Label(root,text='Code Summarization',font=('Consolas',20))
-label1.place(x=250,y=14)
+label1.place(x=250,y=30)
 label2=Label(root,text='Enter code below:',font=('Consolas',14))
-label2.place(x=70,y=60)
+label2.place(x=70,y=80)
 
-text1=Text(root,width=90,height=20)
-text1.place(x=55,y=90)
+text1=Text(root,width=90,height=18)
+text1.place(x=55,y=110)
 text2=Text(root,width=90,height=8)
 text2.place(x=55,y=450)
 
